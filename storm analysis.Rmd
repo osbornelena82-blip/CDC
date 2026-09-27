@@ -1,0 +1,368 @@
+---
+title: "Storm Data"
+output: html_document
+date: "2026-09-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(readr)
+library(forcats)
+library(sf)
+library(maps)
+library(usmap)
+library(MASS)
+```
+9
+
+```{r}
+storm_data <- read_csv("/Users/mcoz/tornadoes_1986_present_f3plus.csv")
+View(storm_data)
+colnames(storm_data)
+```
+
+
+```{r}
+#plotting frquency of tornados per state
+ggplot(storm_data, aes(x = STATE)) +
+  geom_bar() + coord_flip()
+```
+
+```{r}
+#ordering states by frequency
+ggplot(storm_data, aes(x = fct_infreq(STATE))) +
+  geom_bar() + coord_flip()
+```
+```{r}
+#data in first 10 years
+data86 <- storm_data %>% filter(YEAR <= 1996)
+
+#data in most recent 10 years
+data26 <- storm_data %>% filter(YEAR >= 2016)
+
+#states with highest frequency 1986-1996
+ggplot(data86, aes(x = fct_infreq(STATE))) +
+  geom_bar() + coord_flip()
+
+#states with highest frequency 2016-2026
+ggplot(data26, aes(x = fct_infreq(STATE))) +
+  geom_bar() + coord_flip()
+```
+
+
+```{r}
+#getting rid of some unnecessary columns
+storm_data2 <- storm_data %>% select(-c(MAGNITUDE, MAGNITUDE_TYPE, FLOOD_CAUSE, CATEGORY, TOR_OTHER_WFO, TOR_OTHER_CZ_STATE, TOR_OTHER_CZ_FIPS, TOR_OTHER_CZ_NAME, BEGIN_RANGE, EPISODE_NARRATIVE, EVENT_NARRATIVE))
+storm_data2
+```
+```{r}
+write_csv(storm_data2, "~/Downloads/storm_data_cleaned.csv")
+```
+
+```{r}
+yearly <- storm_data2 %>% 
+  group_by(YEAR) %>% #grouping by year
+  summarise(avg_lat = mean(BEGIN_LAT, na.rm = TRUE), avg_lon = mean(BEGIN_LON, na.rm = TRUE) ) %>% #finding avg beginning latitude per year
+  arrange(YEAR) #arranging chronologically
+
+#plotting avg lat and lon over years
+ggplot(yearly, aes(x=YEAR, y=avg_lat)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x)
+ggplot(yearly, aes(x=YEAR, y=avg_lon)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x)
+```
+
+```{r}
+#creating new variable for the mid point of the tornado's lat and long
+storm_data3 <- storm_data2 %>% mutate(midLAT = (BEGIN_LAT + END_LAT)/2, midLON = (BEGIN_LON + END_LON)/2)
+yearly2 <- storm_data3 %>% 
+  group_by(YEAR) %>% #grouping by year
+  summarise(avg_lat = mean(midLAT, na.rm = TRUE), avg_lon = mean(midLON, na.rm = TRUE) ) %>% #finding avg latitude per year
+  arrange(YEAR) #arranging chronologically
+
+#plotting midpoint lat and long by year
+ggplot(yearly2, aes(x=YEAR, y=avg_lat)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x)
+ggplot(yearly2, aes(x=YEAR, y=avg_lon)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x)
+
+
+```
+```{r}
+#year has significant but not predictive effect on lattitude
+lm_mod <- lm(midLAT ~ YEAR, data = storm_data3)
+summary(lm_mod)
+```
+
+
+```{r}
+#heat map reflecting tornado frequency
+
+us_states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+ggplot() +
+  # Map layer knows to use the internal geometry column
+  geom_sf(data = us_states, fill = "gray95", color = "white") + 
+  
+  # Heatmap layer explicitly handles your data frame variables
+  stat_density_2d(
+    data = storm_data3, 
+    aes(x = midLON, y = midLAT, fill = after_stat(level)), 
+    geom = "polygon", 
+    alpha = 0.4
+  ) +
+  
+  coord_sf(xlim = c(-125, -67), ylim = c(24, 50))
+```
+```{r}
+
+#asked AI for assistance creating a heat map with US overlay, and looping over 40 years
+us_states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+
+years <- 1986:2026
+
+for (yr in years) {
+  
+  data_yr <- storm_data3 %>% filter(YEAR == yr)
+  
+  # skip years with too few points to fit a density surface
+  if (nrow(data_yr) < 5) {
+    message("Skipping ", yr, ": only ", nrow(data_yr), " rows")
+    next
+  }
+  
+  p <- ggplot() +
+    geom_sf(data = us_states, fill = "gray95", color = "white") +
+    stat_density_2d(
+      data = data_yr,
+      aes(x = midLON, y = midLAT, fill = after_stat(level)),
+      geom = "polygon",
+      alpha = 0.4
+    ) +
+    coord_sf(xlim = c(-125, -67), ylim = c(24, 50)) +
+    labs(title = paste("Storm Density —", yr)) +
+    theme_minimal()
+  
+  ggsave(
+    filename = paste0("storm_density_", yr, ".png"),
+    plot = p,
+    width = 8, height = 5, dpi = 150
+  )
+}
+```
+
+```{r}
+countypop
+#asked for ai help getting fips in the same format
+# Keep countypop$fips as a zero-padded character string (do NOT convert to numeric)
+countypop <- countypop %>%
+  mutate(fips = str_pad(as.character(fips), 5, pad = "0"))
+
+storm_data3 <- storm_data3 %>%
+  mutate(
+    STATE_FIPS = str_pad(STATE_FIPS, 2, pad = "0"),
+    CZ_FIPS = str_pad(CZ_FIPS, 3, pad = "0")
+  ) %>%
+  unite("full_fips", STATE_FIPS, CZ_FIPS, sep = "", remove = FALSE)
+
+# Join on the correct key: full_fips == fips
+tornadopop <- inner_join(storm_data3, countypop, by = join_by(full_fips == fips))
+tornadopop <- inner_join(tornadopop, countypov, by = join_by(full_fips == fips))
+tornadopop
+
+#got AI help getting property damage into numeric format
+parse_damage <- function(x) {
+  x <- trimws(x)
+  num <- as.numeric(str_extract(x, "^[0-9.]+"))
+  mult <- case_when(
+    str_detect(x, "K$") ~ 1e3,
+    str_detect(x, "M$") ~ 1e6,
+    str_detect(x, "B$") ~ 1e9,
+    TRUE ~ 1
+  )
+  num * mult
+}
+
+tornadopop <- tornadopop %>%
+  mutate(DAMAGE_PROPERTY_num = parse_damage(DAMAGE_PROPERTY))
+
+
+```
+
+
+```{r}
+#property damage is affected by population of a county, not affected by the poverty of a county. Missisippi is the only state that is significant
+propmod <- lm(DAMAGE_PROPERTY_num ~ TOR_F_SCALE + pop_2022 + pct_pov_2021 + STATE, data = tornadopop)
+summary(propmod)
+```
+```{r}
+propmod2 <- lm(DAMAGE_PROPERTY_num ~ pop_2022, data = tornadopop)
+summary(propmod2)
+```
+```{r}
+#of the counties that have had tornados, is their lattitude associated with population. There is lower population associated counties with a higher lattitude. The relationship is significant.
+latmod <- lm(midLAT ~ pop_2022, data = tornadopop)
+summary(latmod)
+```
+```{r}
+#county population against the tornado frequency heat map
+ggplot() +
+  # Map layer knows to use the internal geometry column
+  geom_sf(data = us_states, fill = "gray95", color = "white") + 
+  
+  # Heatmap layer explicitly handles your data frame variables
+  stat_density_2d(
+    data = tornadopop, 
+    aes(x = midLON, y = midLAT, fill = after_stat(level)),
+    geom = "polygon", 
+    alpha = 0.4
+  ) + geom_point(
+    data = tornadopop,
+    aes(x = midLON, y = midLAT, size = pop_2022),
+    color = "pink",
+    alpha = 0.5
+  ) +
+  scale_size_continuous(name = "County\npopulation", range = c(0.5, 6))
+  
+  coord_sf(xlim = c(-125, -67), ylim = c(24, 50))
+
+#Property damage against the tornado frequency heatmap
+ggplot() +
+  # Map layer knows to use the internal geometry column
+  geom_sf(data = us_states, fill = "gray95", color = "white") + 
+  
+  # Heatmap layer explicitly handles your data frame variables
+  stat_density_2d(
+    data = tornadopop, 
+    aes(x = midLON, y = midLAT, fill = after_stat(level)),
+    geom = "polygon", 
+    alpha = 0.4
+  ) + geom_point(
+    data = tornadopop,
+    aes(x = midLON, y = midLAT, size = DAMAGE_PROPERTY_num),
+    color = "purple",
+    alpha = 0.5
+  ) +
+  scale_size_continuous(name = "Property\ndamage", range = c(0.5, 6))
+  
+  coord_sf(xlim = c(-125, -67), ylim = c(24, 50))
+```
+```{r}
+tornadopopbf <- filter(tornadopop, YEAR <= 1996)
+tornadopopaf <- filter(tornadopop, YEAR >= 2015)
+ 
+ggplot() +
+  # Map layer knows to use the internal geometry column
+  geom_sf(data = us_states, fill = "gray95", color = "white") + 
+  
+  # Heatmap layer explicitly handles your data frame variables
+  stat_density_2d(
+    data = tornadopopbf, 
+    aes(x = midLON, y = midLAT, fill = after_stat(level)),
+    geom = "polygon", 
+    alpha = 0.4
+  ) +
+  scale_size_continuous(name = "Property\ndamage", range = c(0.5, 6))
+  
+  coord_sf(xlim = c(-125, -67), ylim = c(24, 50))
+  
+  ggplot() +
+  # Map layer knows to use the internal geometry column
+  geom_sf(data = us_states, fill = "gray95", color = "white") + 
+  
+  # Heatmap layer explicitly handles your data frame variables
+  stat_density_2d(
+    data = tornadopopaf, 
+    aes(x = midLON, y = midLAT, fill = after_stat(level)),
+    geom = "polygon", 
+    alpha = 0.4
+  ) + 
+  scale_size_continuous(name = "Property\ndamage", range = c(0.5, 6))
+  
+  coord_sf(xlim = c(-125, -67), ylim = c(24, 50))
+```
+```{r}
+#average property damage per year
+yearlyprop <- tornadopop %>% 
+  group_by(YEAR) %>% #grouping by year
+  summarise(avg_prop = mean(DAMAGE_PROPERTY_num, na.rm = TRUE)) %>% #finding avg per year
+  arrange(YEAR) #arranging chronologically
+ggplot(yearlyprop, aes(x=YEAR, y=avg_prop)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x)
+
+```
+```{r}
+#asked AI, helped me group to find count of tornados in a state over a period of five years
+
+tornadopop <- tornadopop %>%
+  mutate(
+    YEAR = as.integer(str_sub(as.character(BEGIN_YEARMONTH), 1, 4)),
+    period = (YEAR %/% 5) * 5
+  )
+
+state_period_counts <- tornadopop %>%
+  filter(CZ_TYPE == "C") %>%
+  group_by(STATE, period) %>%
+  summarise(n_tornadoes = n(), .groups = "drop")
+
+# reconcile state naming (STATE is full caps name, need abbr to match countypop conventions)
+state_lookup <- tibble(state_name = toupper(state.name), abbr = state.abb)
+
+state_period_counts <- state_period_counts %>%
+  left_join(state_lookup, by = c("STATE" = "state_name"))
+
+all_periods <- unique(state_period_counts$period)
+
+# grid of every state x every period, so zero-tornado state-periods are included
+full_grid <- tidyr::expand_grid(abbr = state.abb, period = all_periods)
+
+state_period_full <- full_grid %>%
+  left_join(state_period_counts %>% dplyr::select(abbr, period, n_tornadoes),
+            by = c("abbr", "period")) %>%
+  mutate(n_tornadoes = replace_na(n_tornadoes, 0))
+```
+
+
+```{r}
+train <-state_period_full %>% filter(period <= 2000)
+test  <- state_period_full %>% filter(period > 2000)
+
+table(train$period)
+table(test$period)
+
+pois_model <- glm(n_tornadoes ~ abbr +  period, family = poisson(link = "log"), data = train)
+summary(pois_model)
+
+```
+
+
+```{r}
+
+#asked AI how to do a negative binomial model
+
+nb_model <- glm.nb(
+  n_tornadoes ~ abbr +  period,
+  data = train
+)
+summary(nb_model)
+
+```
+```{r}
+linear_model <- lm(
+  n_tornadoes ~ abbr + period,
+  data = train
+)
+summary(linear_model)
+
+```
+
+```{r}
+AIC(pois_model, nb_model, linear_model)
+
+test$predicted_full    <- predict(pois_model,  newdata = test, type = "response")
+mean(abs(test$n_tornadoes - test$predicted_full))
+
+test$predicted_nb   <- predict(nb_model,  newdata = test, type = "response")
+mean(abs(test$n_tornadoes - test$predicted_nb))
+
+test$predicted_lin   <- predict(linear_model,  newdata = test, type = "response")
+mean(abs(test$n_tornadoes - test$predicted_lin))
+```
+
