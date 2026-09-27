@@ -366,3 +366,50 @@ test$predicted_lin   <- predict(linear_model,  newdata = test, type = "response"
 mean(abs(test$n_tornadoes - test$predicted_lin))
 ```
 
+```{r}
+storm_data <- read_csv("/Users/mcoz/tornadoes_1986_present_f3plus.csv")
+storm_data2 <- storm_data %>% select(-c(MAGNITUDE, MAGNITUDE_TYPE, FLOOD_CAUSE, CATEGORY, TOR_OTHER_WFO, TOR_OTHER_CZ_STATE, TOR_OTHER_CZ_FIPS, TOR_OTHER_CZ_NAME, BEGIN_RANGE, EPISODE_NARRATIVE, EVENT_NARRATIVE))
+
+storm_data3 <- storm_data2 %>% mutate(midLAT = (BEGIN_LAT + END_LAT)/2, midLON = (BEGIN_LON + END_LON)/2)
+
+#asked AI for assistance creating a heat map with US overlay, and looping over 40 years
+us_states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+
+years <- 1986:2026
+
+for (yr in years) {
+  
+  data_yr <- storm_data3 %>% filter(YEAR == yr)
+  
+  # skip years with too few points to fit a density surface
+  if (nrow(data_yr) < 5) {
+    message("Skipping ", yr, ": only ", nrow(data_yr), " rows")
+    next
+  }
+  
+  p <- ggplot() +
+    geom_sf(data = us_states, fill = "gray95", color = "white") +
+    stat_density_2d(
+      data = data_yr,
+      aes(x = midLON, y = midLAT, fill = after_stat(level)),
+      geom = "polygon",
+      alpha = 0.4
+    ) +
+    coord_sf(xlim = c(-125, -67), ylim = c(24, 50)) +
+    labs(title = paste("Storm Density —", yr)) +
+    theme_minimal()
+  
+  ggsave(
+    filename = paste0("storm_density_", yr, ".png"),
+    plot = p,
+    width = 8, height = 5, dpi = 150
+  )
+}
+```
+
+```{r}
+ggplot(storm_data_cleaned,aes(x=YEAR)) + geom_bar() + theme_minimal() + ggtitle("Tornados F3 and Over Per Year")
+```
+
+
+
